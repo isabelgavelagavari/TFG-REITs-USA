@@ -1,8 +1,8 @@
+
 # ============================================================
-# TFG: Análisis de la Rentabilidad y Riesgo en el Sector
-# Inmobiliario Cotizado - Evidencia en EE.UU.
+# TFG: Determinantes de la rentabilidad de los índices de REITs en Estados Unidos: un análisis empírico de factores macro-financieros e inmobiliarios
+# Autora: Isabel Gavela Gavari
 # ============================================================
- 
 # LIBRERÍAS
 import pandas as pd
 import numpy as np
