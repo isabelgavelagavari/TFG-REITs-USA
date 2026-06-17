@@ -1,0 +1,345 @@
+# ============================================================
+# TFG - Análisis empírico de la rentabilidad de REITs en EEUU
+# Código simplificado para Google Colab / Python
+# ============================================================
+
+# 1. Librerías
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import statsmodels.api as sm
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+from sklearn.linear_model import LinearRegression
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.neural_network import MLPRegressor
+
+import warnings
+warnings.filterwarnings("ignore")
+
+
+# ============================================================
+# 2. Carga de datos
+# ============================================================
+
+archivo = "TFG_ANALYTICS_DATASET.xlsx"
+
+monthly = pd.read_excel(archivo, sheet_name="Dataset1_Monthly_Frequency", header=2)
+weekly = pd.read_excel(archivo, sheet_name="Dataset2_Weekly_Frequency", header=2)
+
+# Renombramos columnas para trabajar más cómodo
+monthly = monthly.rename(columns={
+    "observation_date": "Date",
+    "FTSE Nareit All Equity REITs Index": "FTSE_REIT",
+    "MSCI US REIT Index": "MSCI_REIT",
+    "10Y Treasury ": "T10Y",
+    "2Y": "T2Y",
+    "Fed Fund Rate ": "FED_FUNDS",
+    "ACPI YoY ": "CPI_YOY",
+    "Break Even Inflation": "BREAKEVEN",
+    "Industrial Production": "IND_PROD",
+    "Spread Crédito( BBB- Treasury)": "SPREAD_BBB",
+    "VIX (Cambio Mensual) ": "VIX",
+    "Case-Shiller ": "CASE_SHILLER",
+    "Housing Starts ": "HOUSING_STARTS",
+    "Building Permits ": "BUILDING_PERMITS"
+})
+
+weekly = weekly.rename(columns={
+    "Observation_date": "Date",
+    "FTSE Nareit All Equity REITs Index": "FTSE_REIT",
+    "MSCI US REIT Index": "MSCI_REIT",
+    "10Y Treasury ": "T10Y",
+    "2Y": "T2Y",
+    "T10YIE": "BREAKEVEN",
+    "Spread Crédito( BBB- Treasury)": "SPREAD_BBB",
+    "VIX (Cambio Mensual) ": "VIX"
+})
+
+monthly["Date"] = pd.to_datetime(monthly["Date"])
+weekly["Date"] = pd.to_datetime(weekly["Date"])
+
+monthly = monthly.sort_values("Date")
+weekly = weekly.sort_values("Date")
+
+print("Dataset mensual:", monthly.shape)
+print("Dataset semanal:", weekly.shape)
+print(monthly.head())
+
+
+# ============================================================
+# 3. Limpieza y creación de variables
+# ============================================================
+
+# Variable dependiente principal: rentabilidad MSCI US REIT Index
+# En el Excel esta variable ya está calculada como rentabilidad.
+monthly["REIT_Return"] = monthly["MSCI_REIT"]
+weekly["REIT_Return"] = weekly["MSCI_REIT"]
+
+# Variables financieras / macroeconómicas
+monthly["Delta_T10Y"] = monthly["T10Y"].diff()
+monthly["Delta_T2Y"] = monthly["T2Y"].diff()
+monthly["Curve_10Y_2Y"] = monthly["T10Y"] - monthly["T2Y"]
+monthly["Delta_VIX"] = monthly["VIX"].diff()
+monthly["Delta_Spread_BBB"] = monthly["SPREAD_BBB"].diff()
+monthly["Delta_Breakeven"] = monthly["BREAKEVEN"].diff()
+
+# Variables inmobiliarias y de actividad económica
+monthly["Case_Shiller_YoY"] = monthly["CASE_SHILLER"].pct_change(12) * 100
+monthly["Housing_Starts_Chg"] = monthly["HOUSING_STARTS"].pct_change() * 100
+monthly["Building_Permits_Chg"] = monthly["BUILDING_PERMITS"].pct_change() * 100
+monthly["Industrial_Prod_Chg"] = monthly["IND_PROD"].pct_change() * 100
+
+# En el dataset semanal solo usamos variables financieras
+weekly["Delta_T10Y"] = weekly["T10Y"].diff()
+weekly["Delta_T2Y"] = weekly["T2Y"].diff()
+weekly["Curve_10Y_2Y"] = weekly["T10Y"] - weekly["T2Y"]
+weekly["Delta_VIX"] = weekly["VIX"].diff()
+weekly["Delta_Spread_BBB"] = weekly["SPREAD_BBB"].diff()
+weekly["Delta_Breakeven"] = weekly["BREAKEVEN"].diff()
+
+monthly_clean = monthly.dropna().reset_index(drop=True)
+weekly_clean = weekly.dropna().reset_index(drop=True)
+
+print("Observaciones mensuales tras limpieza:", len(monthly_clean))
+print("Observaciones semanales tras limpieza:", len(weekly_clean))
+
+
+# ============================================================
+# 4. Análisis exploratorio básico
+# ============================================================
+
+variables_financieras = [
+    "Delta_T10Y", "Delta_T2Y", "Curve_10Y_2Y", "FED_FUNDS",
+    "CPI_YOY", "Delta_Breakeven", "Delta_Spread_BBB", "Delta_VIX",
+    "Industrial_Prod_Chg"
+]
+
+variables_inmobiliarias = [
+    "Case_Shiller_YoY", "Housing_Starts_Chg", "Building_Permits_Chg"
+]
+
+variables_modelo = ["REIT_Return"] + variables_financieras + variables_inmobiliarias
+
+print("\nEstadísticos descriptivos - dataset mensual")
+print(monthly_clean[variables_modelo].describe().round(4))
+
+# Evolución de la rentabilidad REIT
+plt.figure(figsize=(10,5))
+plt.plot(monthly_clean["Date"], monthly_clean["REIT_Return"])
+plt.axhline(0, color="black", linestyle="--", linewidth=0.8)
+plt.title("Rentabilidad mensual del MSCI US REIT Index")
+plt.xlabel("Fecha")
+plt.ylabel("Rentabilidad mensual")
+plt.tight_layout()
+plt.savefig("grafico_1_rentabilidad_reits.png", dpi=150)
+plt.show()
+
+# Distribución de la rentabilidad
+plt.figure(figsize=(8,5))
+plt.hist(monthly_clean["REIT_Return"], bins=30, edgecolor="black")
+plt.title("Distribución de la rentabilidad mensual de REITs")
+plt.xlabel("Rentabilidad mensual")
+plt.ylabel("Frecuencia")
+plt.tight_layout()
+plt.savefig("grafico_2_distribucion_reits.png", dpi=150)
+plt.show()
+
+# Matriz de correlaciones
+plt.figure(figsize=(12,8))
+sns.heatmap(monthly_clean[variables_modelo].corr(), annot=False, cmap="coolwarm", center=0)
+plt.title("Matriz de correlación de las variables del modelo")
+plt.tight_layout()
+plt.savefig("grafico_3_correlacion.png", dpi=150)
+plt.show()
+
+
+# ============================================================
+# 5. Modelos OLS para contrastar hipótesis
+# ============================================================
+
+# Modelo 1: solo variables financieras y macroeconómicas
+X1 = monthly_clean[variables_financieras]
+y = monthly_clean["REIT_Return"]
+X1 = sm.add_constant(X1)
+modelo_1 = sm.OLS(y, X1).fit()
+
+print("\n================ MODELO 1: Variables financieras ================")
+print(modelo_1.summary())
+
+# Modelo 2: variables financieras + inmobiliarias
+X2 = monthly_clean[variables_financieras + variables_inmobiliarias]
+X2 = sm.add_constant(X2)
+modelo_2 = sm.OLS(y, X2).fit()
+
+print("\n================ MODELO 2: Financieras + inmobiliarias ================")
+print(modelo_2.summary())
+
+# Modelo 3: solo variables inmobiliarias
+X3 = monthly_clean[variables_inmobiliarias]
+X3 = sm.add_constant(X3)
+modelo_3 = sm.OLS(y, X3).fit()
+
+print("\n================ MODELO 3: Solo variables inmobiliarias ================")
+print(modelo_3.summary())
+
+# Tabla comparativa de modelos OLS
+comparacion_ols = pd.DataFrame({
+    "Modelo": ["Modelo 1: financiero", "Modelo 2: financiero + inmobiliario", "Modelo 3: inmobiliario"],
+    "R2": [modelo_1.rsquared, modelo_2.rsquared, modelo_3.rsquared],
+    "R2_ajustado": [modelo_1.rsquared_adj, modelo_2.rsquared_adj, modelo_3.rsquared_adj],
+    "AIC": [modelo_1.aic, modelo_2.aic, modelo_3.aic],
+    "BIC": [modelo_1.bic, modelo_2.bic, modelo_3.bic]
+})
+
+print("\nComparación de modelos OLS")
+print(comparacion_ols.round(4))
+comparacion_ols.to_excel("tabla_comparacion_ols.xlsx", index=False)
+
+
+# ============================================================
+# 6. Machine Learning sencillo con dataset semanal
+# ============================================================
+
+# Usamos el dataset semanal porque tiene más observaciones.
+# La variable objetivo sigue siendo la rentabilidad del MSCI US REIT Index.
+
+ml_vars = [
+    "Delta_T10Y", "Delta_T2Y", "Curve_10Y_2Y",
+    "Delta_Breakeven", "Delta_Spread_BBB", "Delta_VIX"
+]
+
+ml_data = weekly_clean[["Date", "REIT_Return"] + ml_vars].dropna()
+X = ml_data[ml_vars]
+y = ml_data["REIT_Return"]
+
+# División temporal sencilla: 80% entrenamiento y 20% test
+split = int(len(ml_data) * 0.80)
+X_train = X.iloc[:split]
+X_test = X.iloc[split:]
+y_train = y.iloc[:split]
+y_test = y.iloc[split:]
+fechas_test = ml_data["Date"].iloc[split:]
+
+print("\nTrain:", X_train.shape)
+print("Test:", X_test.shape)
+
+# Modelos utilizados
+modelos = {
+    "Regresion lineal": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", LinearRegression())
+    ]),
+    "KNN": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", KNeighborsRegressor())
+    ]),
+    "Arbol de decision": DecisionTreeRegressor(random_state=42),
+    "Random Forest": RandomForestRegressor(random_state=42),
+    "Gradient Boosting": GradientBoostingRegressor(random_state=42),
+    "Red neuronal": Pipeline([
+        ("scaler", StandardScaler()),
+        ("model", MLPRegressor(max_iter=1000, random_state=42))
+    ])
+}
+
+# Hiperparámetros sencillos, en línea con un TFG académico-práctico
+parametros = {
+    "Regresion lineal": {},
+    "KNN": {"model__n_neighbors": [3, 5, 7]},
+    "Arbol de decision": {"max_depth": [3, 5, 7], "min_samples_leaf": [5, 10]},
+    "Random Forest": {"n_estimators": [100, 200], "max_depth": [3, 5, None]},
+    "Gradient Boosting": {"n_estimators": [100, 200], "learning_rate": [0.05, 0.1], "max_depth": [2, 3]},
+    "Red neuronal": {"model__hidden_layer_sizes": [(20,), (50,)], "model__alpha": [0.001, 0.01]}
+}
+
+resultados = []
+predicciones = {}
+
+for nombre, modelo in modelos.items():
+    print("\nEntrenando modelo:", nombre)
+    grid = GridSearchCV(
+        estimator=modelo,
+        param_grid=parametros[nombre],
+        cv=5,
+        scoring="neg_root_mean_squared_error"
+    )
+    grid.fit(X_train, y_train)
+    mejor_modelo = grid.best_estimator_
+    y_pred = mejor_modelo.predict(X_test)
+    predicciones[nombre] = y_pred
+
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+
+    resultados.append({
+        "Modelo": nombre,
+        "Mejores parametros": str(grid.best_params_),
+        "RMSE": rmse,
+        "MAE": mae,
+        "R2_test": r2
+    })
+
+resultados_ml = pd.DataFrame(resultados).sort_values("RMSE")
+print("\nResultados modelos Machine Learning")
+print(resultados_ml.round(5))
+resultados_ml.to_excel("tabla_resultados_ml.xlsx", index=False)
+
+
+# ============================================================
+# 7. Gráficos de resultados ML
+# ============================================================
+
+# Comparación de RMSE
+plt.figure(figsize=(10,5))
+sns.barplot(data=resultados_ml, x="Modelo", y="RMSE")
+plt.xticks(rotation=30, ha="right")
+plt.title("Comparación de modelos ML según RMSE")
+plt.tight_layout()
+plt.savefig("grafico_4_rmse_modelos_ml.png", dpi=150)
+plt.show()
+
+# Real vs predicho del mejor modelo
+mejor_nombre = resultados_ml.iloc[0]["Modelo"]
+y_pred_mejor = predicciones[mejor_nombre]
+
+plt.figure(figsize=(11,5))
+plt.plot(fechas_test, y_test.values, label="Rentabilidad real")
+plt.plot(fechas_test, y_pred_mejor, label="Rentabilidad predicha", linestyle="--")
+plt.axhline(0, color="black", linewidth=0.8)
+plt.title("Rentabilidad real vs predicha - " + mejor_nombre)
+plt.xlabel("Fecha")
+plt.ylabel("Rentabilidad semanal")
+plt.legend()
+plt.tight_layout()
+plt.savefig("grafico_5_real_vs_predicho.png", dpi=150)
+plt.show()
+
+
+# ============================================================
+# 8. Resumen final para interpretar resultados
+# ============================================================
+
+print("\n================ RESUMEN FINAL ================")
+print("Mejor modelo ML según RMSE:", mejor_nombre)
+print("\nComparación OLS:")
+print(comparacion_ols[["Modelo", "R2_ajustado", "AIC"]].round(4))
+
+if modelo_1.rsquared_adj > modelo_3.rsquared_adj:
+    print("\nEn el análisis OLS, las variables financieras tienen mayor poder explicativo que las inmobiliarias.")
+else:
+    print("\nEn el análisis OLS, las variables inmobiliarias tienen mayor poder explicativo que las financieras.")
+
+if modelo_2.rsquared_adj > modelo_1.rsquared_adj:
+    print("El modelo ampliado mejora el R2 ajustado, por lo que las variables inmobiliarias aportan información adicional.")
+else:
+    print("El modelo ampliado no mejora el R2 ajustado, por lo que las variables inmobiliarias no añaden poder explicativo claro.")
